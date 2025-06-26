@@ -31,7 +31,7 @@ from protflow.metrics.generic_metric_runner import GenericMetric
 from protflow.metrics.ligand import LigandClashes, LigandContacts
 from protflow.metrics.rmsd import BackboneRMSD, MotifRMSD, MotifSeparateSuperpositionRMSD
 import protflow.tools.rosetta
-from protflow.utils.biopython_tools import renumber_pdb_by_residue_mapping, load_structure_from_pdbfile, save_structure_to_pdbfile, load_sequence_from_fasta
+from protflow.utils.biopython_tools import renumber_pdb_by_residue_mapping, load_structure_from_pdbfile, save_structure_to_pdbfile, get_sequence_from_pose, load_sequence_from_fasta
 import protflow.utils.plotting as plots
 from protflow.tools.residue_selectors import DistanceSelector
 
@@ -321,24 +321,26 @@ def omit_AAs(omitted_aas:str, allowed_aas:str, dir:str, name:str) -> str:
     if isinstance(omitted_aas, str):
         omitted_aas = omitted_aas.rstrip(";").split(";")
         for mutation in omitted_aas:
-            position, omitted_aas = mutation.split(":")
+            position, omitted = mutation.split(":")
             if not position[0].isalpha():
                 raise KeyError(f"Position for mutations have to include chain information (e.g. A{position}), not just {position}!")
-            mutations_dict[position.strip()] = omitted_aas.strip()
+            mutations_dict[position.strip()] = omitted.strip()
     if isinstance(allowed_aas, str):
         allowed_aas = allowed_aas.rstrip(";").split(";")
         for mutation in allowed_aas:
-            position, allowed_aas = mutation.split(":")
+            position, allowed = mutation.split(":")
             if not position[0].isalpha():
                 raise KeyError(f"Position for mutations have to include chain information (e.g. A{position}), not just {position}!")
             all_aas = aa_one_letter_code()
-            for aa in allowed_aas:
+            for aa in allowed:
                 all_aas = all_aas.replace(aa.upper(), "")
             mutations_dict[position.strip()] = all_aas.upper().strip()
     filename = os.path.join(dir, f"{name}_mutations.json")
     with open(filename, "w") as out:
         json.dump(mutations_dict, out)
-    return f"--omit_AA_per_residue {filename}" 
+    return f"--omit_AA_per_residue {filename}"
+
+
 
 def log_cmd(arguments):
     cmd = ''
@@ -612,7 +614,8 @@ def create_coupled_moves_sequences(output_dir, cm_resultsdir, poses_df, occurenc
         for _, row in poses_df.iterrows():
             statsdict = statsfiles_to_json(cm_resultsdir, row['poses_description'], os.path.join(cm_resultsdir, f"{row['poses_description']}.json"))
             mutations = generate_mutations_dict(statsdict, occurence_cutoff)
-            seq = list(load_sequence_from_fasta(row["eval_fasta_conversion_fasta_location"]).seq)
+            seq = list(get_sequence_from_pose(load_structure_from_pdbfile(row["poses"]))) # has to be loaded directly, otherwise running cm on cm output again will not work
+            #seq = list(load_sequence_from_fasta(row["eval_fasta_conversion_fasta_location"]).seq)
             variants_df = pd.DataFrame(generate_variants(mutations, seq), columns=[f'cm_sequences'])
             variants_df["poses_description"] = row["poses_description"]
             variants_df = variants_df.merge(poses_df, on="poses_description", how="left")
@@ -1623,15 +1626,15 @@ def main(args):
         if args.variants_mutations_csv:
             mutations = pd.read_csv(args.variants_mutations_csv)
             mutations.replace({np.nan: None}, inplace=True)
-            mutations.rename({"omit_AAs": "variants_omit_AAs", "allow_AAs": "variants_omit_AAs"})
+            mutations.rename(columns={"omit_AAs": "variants_omit_AAs", "allow_AAs": "variants_allow_AAs"}, inplace=True)
             backbones.df = backbones.df.merge(mutations, on="poses_description", how="right")
             backbones.df.reset_index(drop=True, inplace=True)
             mutations_dir = os.path.join(backbones.work_dir, "mutations")
             os.makedirs(mutations_dir, exist_ok=True)
-            backbones.df["variants_pose_opts"] = backbones.df.apply(lambda row: omit_AAs(row['variants_omit_AAs'], row['variants_omit_AAs'], mutations_dir, row["poses_description"]), axis=1)
+            backbones.df["variants_pose_opts"] = backbones.df.apply(lambda row: omit_AAs(row['variants_omit_AAs'], row['variants_allow_AAs'], mutations_dir, row["poses_description"]), axis=1)
         else:
             backbones.df["variants_omit_AAs"] = None
-            backbones.df["variants_omit_AAs"] = None
+            backbones.df["variants_allow_AAs"] = None
 
         if args.variants_input_poses_per_bb:
             backbones.filter_poses_by_rank(n=args.variants_input_poses_per_bb, score_col="eval_composite_score", remove_layers=1)
@@ -1656,7 +1659,7 @@ def main(args):
         )
 
         if args.variants_run_cm:
-            backbones.df["cm_resfile"] = backbones.df.apply(lambda row: create_mutation_resfiles(row['omit_AAs'], row['allow_AAs'], row['poses_description'], os.path.join(backbones.work_dir, "resfiles")), axis=1)
+            backbones.df["cm_resfile"] = backbones.df.apply(lambda row: create_mutation_resfiles(row['variants_omit_AAs'], row['variants_allow_AAs'], row['poses_description'], os.path.join(backbones.work_dir, "resfiles")), axis=1)
             cm_options =  f"-parser:protocol {os.path.abspath(os.path.join(args.riff_diff_dir, 'utils', 'coupled_moves.xml'))} -coupled_moves:ligand_mode true -coupled_moves:ligand_weight 2 -beta -ignore_zero_occupancy false -flip_HNQ true"
             if params:
                 cm_options = cm_options + f" -extra_res_fa {' '.join(params)}"
@@ -1726,6 +1729,7 @@ def main(args):
         catres_motif_heavy_rmsd.run(poses = backbones, prefix = f"variants_esm_catres_heavy")
         catres_motif_bb_rmsd.run(poses = backbones, prefix = f"variants_esm_catres_bb")
         bb_rmsd.run(poses = backbones, ref_col=f"variants_bbopt_location", prefix = f"variants_esm_backbone")
+        fragment_motif_bb_rmsd.run(poses = backbones, prefix = "variants_esm_motif")
         tm_score_calculator.run(poses = backbones, prefix = f"variants_esm_tm", ref_col = f"variants_bbopt_location")
 
         backbones.filter_poses_by_value(score_col=f"variants_esm_plddt", value=args.ref_plddt_cutoff_end, operator=">=", prefix=f"variants_esm_plddt", plot=True)
@@ -1757,10 +1761,10 @@ def main(args):
 
         # copy description column for merging with data later
         backbones.df[f'variants_post_esm_description'] = backbones.df['poses_description']
-
+        
         # calculate multi-scoreterm score:
         logging.info("Calculating composite score for post-esm evaluation...")
-        variants_esm_scoreterms = ["variants_esm_plddt", "variants_esm_catres_bb_rmsd", "variants_esm_catres_heavy_rmsd", "variants_esm__motif_rmsd", "variants_esm_contacts_score", "variants_esm_ligand_clashes"]
+        variants_esm_scoreterms = ["variants_esm_plddt", "variants_esm_catres_bb_rmsd", "variants_esm_catres_heavy_rmsd", "variants_esm_motif_rmsd", "variants_esm_contacts_score", "variants_esm_ligand_clashes"]
         variants_esm_weights = [-2, 4, 1, 1, 2, 4]
         backbones.calculate_composite_score(
             name="variants_esm_composite_score",
