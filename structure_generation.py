@@ -976,16 +976,16 @@ def main(args):
                 show_fig = False
             )
 
-            if args.rfdiffusion_max_clashes:
-                backbones.filter_poses_by_value(score_col="rfdiffusion_ligand_clashes", value=args.rfdiffusion_max_clashes, operator="<=", prefix="rfdiffusion_ligand_clashes", plot=True)
-            if args.rfdiffusion_max_rog:
-                backbones.filter_poses_by_value(score_col="rfdiffusion_rog_data", value=args.rfdiffusion_max_rog, operator="<=", prefix="rfdiffusion_rog", plot=True)
-            if args.min_contacts:
-                backbones.filter_poses_by_value(score_col="rfdiffusion_lig_contacts", value=args.min_contacts, operator=">=", prefix="rfdiffusion_lig_contacts", plot=True)
-            if args.rfdiffusion_catres_bb_rmsd:
-                backbones.filter_poses_by_value(score_col="rfdiffusion_catres_rmsd", value=args.rfdiffusion_catres_bb_rmsd, operator="<=", prefix="rfdiffusion_catres_bb_rmsd", plot=True)
-            if args.rfdiffusion_motif_bb_rmsd:
-                backbones.filter_poses_by_value(score_col="rfdiffusion_motif_rmsd", value=args.rfdiffusion_motif_bb_rmsd, operator="<=", prefix="rfdiffusion_motif_bb_rmsd", plot=True)
+            #if args.rfdiffusion_max_clashes:
+            #    backbones.filter_poses_by_value(score_col="rfdiffusion_ligand_clashes", value=args.rfdiffusion_max_clashes, operator="<=", prefix="rfdiffusion_ligand_clashes", plot=True)
+            #if args.rfdiffusion_max_rog:
+            #    backbones.filter_poses_by_value(score_col="rfdiffusion_rog_data", value=args.rfdiffusion_max_rog, operator="<=", prefix="rfdiffusion_rog", plot=True)
+            #if args.min_contacts:
+            #    backbones.filter_poses_by_value(score_col="rfdiffusion_lig_contacts", value=args.min_contacts, operator=">=", prefix="rfdiffusion_lig_contacts", plot=True)
+            #if args.rfdiffusion_catres_bb_rmsd:
+            #    backbones.filter_poses_by_value(score_col="rfdiffusion_catres_rmsd", value=args.rfdiffusion_catres_bb_rmsd, operator="<=", prefix="rfdiffusion_catres_bb_rmsd", plot=True)
+            #if args.rfdiffusion_motif_bb_rmsd:
+            #    backbones.filter_poses_by_value(score_col="rfdiffusion_motif_rmsd", value=args.rfdiffusion_motif_bb_rmsd, operator="<=", prefix="rfdiffusion_motif_bb_rmsd", plot=True)
 
             if len(backbones.df) == 0:
                 logging.warning(f"No poses passed RFdiffusion filtering steps during {prefix}")
@@ -1013,7 +1013,7 @@ def main(args):
                     plot=True
                 )
 
-                backbones.filter_poses_by_rank(n=args.screen_esm_input_poses, score_col="pre_esm_comp_score", prefix="esm_input_filter", plot=True, plot_cols=["rfdiffusion_lig_contacts", "rfdiffusion_ligand_clashes", "rfdiffusion_rog_data", "postdiffusion_ligandmpnn_overall_confidence"])
+                #backbones.filter_poses_by_rank(n=args.screen_esm_input_poses, score_col="pre_esm_comp_score", prefix="esm_input_filter", plot=True, plot_cols=["rfdiffusion_lig_contacts", "rfdiffusion_ligand_clashes", "rfdiffusion_rog_data", "postdiffusion_ligandmpnn_overall_confidence"])
 
 
             else:
@@ -1066,7 +1066,7 @@ def main(args):
                 backbones.calculate_composite_score(
                     name="pre_esm_comp_score",
                     scoreterms=["bbopt_total_score", "bbopt_contacts_score", "bbopt_ligand_clashes", "rfdiffusion_rog_data", "mpnn_overall_confidence"],
-                    weights=[1, 1, 1, -1, -1],
+                    weights=[1, 1, 1, 1, -1],
                     plot=True
                 )
 
@@ -1098,11 +1098,11 @@ def main(args):
             )
 
             # filter poses:
-            backbones.filter_poses_by_value(score_col="esm_plddt", value=70, operator=">=", prefix="screen_esm_plddt", plot=True)
-            backbones.filter_poses_by_value(score_col="esm_tm_TM_score_ref", value=0.9, operator=">=", prefix="screen_esm_TMscore", plot=True)
-            backbones.filter_poses_by_value(score_col="esm_catres_bb_rmsd", value=1.5, operator="<=", prefix="screen_esm_catres_bb_rmsd", plot=True)
-            backbones.filter_poses_by_value(score_col="esm_motif_rmsd", value=1.5, operator="<=", prefix="esm_motif_rmsd", plot=True)
-            backbones.filter_poses_by_value(score_col="esm_rog_data", value=args.rfdiffusion_max_rog, operator="<=", prefix="esm_rog", plot=True)
+            #backbones.filter_poses_by_value(score_col="esm_plddt", value=70, operator=">=", prefix="screen_esm_plddt", plot=True)
+            #backbones.filter_poses_by_value(score_col="esm_tm_TM_score_ref", value=0.9, operator=">=", prefix="screen_esm_TMscore", plot=True)
+            #backbones.filter_poses_by_value(score_col="esm_catres_bb_rmsd", value=1.5, operator="<=", prefix="screen_esm_catres_bb_rmsd", plot=True)
+            #backbones.filter_poses_by_value(score_col="esm_motif_rmsd", value=1.5, operator="<=", prefix="esm_motif_rmsd", plot=True)
+            #backbones.filter_poses_by_value(score_col="esm_rog_data", value=args.rfdiffusion_max_rog, operator="<=", prefix="esm_rog", plot=True)
 
             # add back ligand and determine pocket-ness!
             logging.info(f"Adding Ligand back into the structure for ligand-based pocket prediction.")
@@ -1118,7 +1118,7 @@ def main(args):
             ligand_contacts.run(poses=backbones, prefix="esm_lig")
             backbones.df = calculate_contact_score(df=backbones.df, contact_col="esm_lig_contacts", score_col="esm_contacts_score", target_value=args.contacts_target_value)
 
-            backbones.filter_poses_by_value(score_col="esm_lig_contacts", value=args.min_contacts, operator=">=", prefix="esm_lig_contacts", plot=True)
+            #backbones.filter_poses_by_value(score_col="esm_lig_contacts", value=args.min_contacts, operator=">=", prefix="esm_lig_contacts", plot=True)
 
 
             # calculate multi-scorerterm score for the final backbone filter:
@@ -1130,6 +1130,9 @@ def main(args):
                 weights=screen_weights,
                 plot=True
             )
+
+            # write motif test scores
+            backbones.save_scores("motif_test_full_scores.json")
 
             # filter down to rfdiffusion backbones
             backbones.filter_poses_by_rank(
