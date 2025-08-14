@@ -655,6 +655,17 @@ def trim_indices(arr, upper_limit, lower_limit, n):
         arr = arr[n:]
     return arr
 
+def sample_random_ensembles(df: pd.DataFrame, group_col: str, n: int, seed: int | None = None) -> pd.DataFrame:
+    """
+    Return subset of df containing all rows for n randomly chosen groups from `group_col`.
+    Sampling is without replacement. If n > #groups, it caps at #groups.
+    """
+    groups = df[group_col].drop_duplicates()
+    if len(groups) == 0:
+        raise RuntimeError(f"No groups found in column '{group_col}'.")
+    n_eff = min(int(n), len(groups))
+    picked = groups.sample(n=n_eff, random_state=seed)
+    return df[df[group_col].isin(picked)].reset_index(drop=True)
 
 def extract_fragments(rotamer_positions_df: pd.DataFrame, fraglib: pd.DataFrame, frag_pos_to_replace: list, fragsize: int, working_dir: str):
     '''
@@ -2096,28 +2107,54 @@ def main(args):
     log_and_print("Creating paths out of ensembles...")
     post_clash['path_score'] = post_clash['ensemble_score']
     post_clash['path_num_matches'] = 0
-    
-    # filter for top ensembles to speed things up, since paths within an ensemble have the same score
+
+    # Generate all path orderings once
     paths = ["".join(perm) for perm in itertools.permutations(chains)]
-    #post_clash = sort_dataframe_groups_by_column(df=post_clash, group_col="ensemble_num", sort_col="path_score", ascending=False)
-    dfs = [post_clash.assign(path_name=post_clash['ensemble_num'].astype(str)+"_" + p) for p in paths]
-    path_df = pd.concat(dfs, ignore_index=True)
+
+    if args.sample_ensembles:
+        # NEW: randomly sample ensembles first (before exploding to paths)
+        log_and_print(f"Randomly selecting {args.sample_ensembles} ensembles (keeping ALL paths for each).")
+        post_clash = sample_random_ensembles(post_clash, "ensemble_num", args.sample_ensembles, seed=args.sample_seed)
+
+        # Important: do NOT apply any top-N filtering here; we want all paths for the sampled ensembles.
+        dfs = [post_clash.assign(path_name=post_clash['ensemble_num'].astype(str) + "_" + p) for p in paths]
+        path_df = pd.concat(dfs, ignore_index=True)
+    else:
+        # Original behavior: keep only the top ensembles (by group mean score) to bound the path explosion.
+        post_clash = sort_dataframe_groups_by_column(
+            df=post_clash, group_col="ensemble_num", sort_col="path_score",
+            ascending=False, filter_top_n=args.max_out
+        )
+        dfs = [post_clash.assign(path_name=post_clash['ensemble_num'].astype(str) + "_" + p) for p in paths]
+        path_df = pd.concat(dfs, ignore_index=True)
+
     log_and_print("Done creating paths.")
 
     pdb_dir = os.path.join(working_dir, "motif_library")
     os.makedirs(pdb_dir, exist_ok=True)
 
-    if args.max_paths_per_ensemble:
-        df_list = []
-        for _, ensembles in path_df.groupby('ensemble_num', sort=False):
-            df = sort_dataframe_groups_by_column(ensembles, group_col="path_name", sort_col="path_score", ascending=False, filter_top_n=args.max_paths_per_ensemble, randomize_ties=True)
-            df_list.append(df)
-        path_df = pd.concat(df_list)
+    if args.sample_ensembles:
+        if args.max_paths_per_ensemble:
+            log_and_print("NOTE: Ignoring --max_paths_per_ensemble because --sample_ensembles is set (keeping ALL paths for each sampled ensemble).")
+        if args.max_out is not None:
+            log_and_print("NOTE: Ignoring --max_out because --sample_ensembles is set (keeping ALL paths for each sampled ensemble).")
+        top_path_df = path_df
+    else:
+        if args.max_paths_per_ensemble:
+            df_list = []
+            for _, ensembles in path_df.groupby('ensemble_num', sort=False):
+                df = sort_dataframe_groups_by_column(
+                    ensembles, group_col="path_name", sort_col="path_score",
+                    ascending=False, filter_top_n=args.max_paths_per_ensemble, randomize_ties=True
+                )
+                df_list.append(df)
+            path_df = pd.concat(df_list)
 
-    # select top n paths
-    log_and_print(f"Selecting top {args.max_top_out} paths...")
-    top_path_df = sort_dataframe_groups_by_column(df=path_df, group_col="path_name", sort_col="path_score", ascending=False, randomize_ties=True, filter_top_n=args.max_top_out)
-
+        log_and_print(f"Selecting top {args.max_out} paths...")
+        top_path_df = sort_dataframe_groups_by_column(
+            df=path_df, group_col="path_name", sort_col="path_score",
+            ascending=False, filter_top_n=args.max_out
+    )
     log_and_print(f"Found {int(len(top_path_df.index)/len(chains))} paths.")
 
     # select random paths
@@ -2278,6 +2315,9 @@ if __name__ == "__main__":
     argparser.add_argument("--max_top_out", type=int, default=500, help="Maximum number of top-ranked output paths")
     argparser.add_argument("--max_random_out", type=int, default=500, help="Maximum number of random-ranked output paths")
 
+    # ensemble sampling args
+    argparser.add_argument("--sample_ensembles", type=int, default=None, help="If set, randomly select this many ensembles (by ensemble_num) and output ALL paths from those ensembles.")
+    argparser.add_argument("--sample_seed", type=int, default=None, help="Optional RNG seed for --sample_ensembles (reproducible sampling).")
 
     args = argparser.parse_args()
 
