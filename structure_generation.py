@@ -780,6 +780,7 @@ def main(args):
 
     # set up runners
     logging.info(f"Settung up runners.")
+    esm = protflow.tools.ESM(jobstarter = gpu_jobstarter)
     rfdiffusion = protflow.tools.rfdiffusion.RFdiffusion(jobstarter = gpu_jobstarter)
     chain_adder = protflow.tools.protein_edits.ChainAdder(jobstarter = small_cpu_jobstarter)
     chain_remover = protflow.tools.protein_edits.ChainRemover(jobstarter = small_cpu_jobstarter)
@@ -1022,7 +1023,7 @@ def main(args):
                     prefix = "postdiffusion_ligandmpnn",
                     nseq = args.screen_num_seq_thread_sequences,
                     options = ligandmpnn_options,
-                    model_type = "ligand_mpnn",
+                    model_type = "bbopt_ligand_mpnn",
                     fixed_res_col = "fixed_residues",
                     return_seq_threaded_pdbs_as_pose = True
                 )
@@ -1052,7 +1053,7 @@ def main(args):
                 # run ligandmpnn on relaxed poses
                 ligand_mpnn.run(
                     poses = backbones,
-                    prefix = "mpnn",
+                    prefix = "ligand_mpnn",
                     nseq = args.screen_num_mpnn_sequences,
                     model_type = "ligand_mpnn",
                     options = ligandmpnn_options,
@@ -1073,8 +1074,16 @@ def main(args):
                 # filter esm input poses
                 backbones.filter_poses_by_rank(n=args.screen_esm_input_poses, score_col="pre_esm_comp_score", prefix="esm_input_filter", plot=True, plot_cols=["bbopt_total_score", "bbopt_lig_contacts", "bbopt_ligand_clashes", "rfdiffusion_rog_data", "mpnn_overall_confidence"])
 
+            # pre-calculate esm probs with esm runner
+            logging.info("LigandMPNN finished, now calculating esm probabilities with ESM2.")
+            esm.run(
+                poses = backbones,
+                prefix = "plm_esm",
+                include = "mean_entropy"
+            )
+
             # predict with ESMFold
-            logging.info(f"LigandMPNN finished, now predicting {len(backbones)} sequences using ESMFold.")
+            logging.info(f"Predicting {len(backbones)} sequences using ESMFold.")
             esmfold.run(
                 poses = backbones,
                 prefix = "esm"
@@ -1105,7 +1114,7 @@ def main(args):
             #backbones.filter_poses_by_value(score_col="esm_rog_data", value=args.rfdiffusion_max_rog, operator="<=", prefix="esm_rog", plot=True)
 
             # add back ligand and determine pocket-ness!
-            logging.info(f"Adding Ligand back into the structure for ligand-based pocket prediction.")
+            logging.info("Adding Ligand back into the structure for ligand-based pocket prediction.")
             chain_adder.superimpose_add_chain(
                 poses = backbones,
                 prefix = "post_prediction_ligand",
