@@ -2015,6 +2015,12 @@ def main(args):
     in_df = pd.concat(assembly)
 
     ################## CLASH DETECTION ##########################
+    # safety for later
+    args.max_out = 0
+    if args.max_top_out:
+        args.max_out += args.max_top_out
+    if args.max_random_out:
+        args.max_out += args.max_random_out
 
     log_and_print("Fragment selection completed, continuing with clash checks...")
 
