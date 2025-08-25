@@ -781,7 +781,7 @@ def main(args):
     real_gpu_jobstarter = SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus) # esmfold does not work on cpu
 
     # set up runners
-    logging.info(f"Settung up runners.")
+    logging.info("Settung up runners.")
     rfdiffusion = protflow.tools.rfdiffusion.RFdiffusion(jobstarter = gpu_jobstarter)
     chain_adder = protflow.tools.protein_edits.ChainAdder(jobstarter = small_cpu_jobstarter)
     chain_remover = protflow.tools.protein_edits.ChainRemover(jobstarter = small_cpu_jobstarter)
@@ -806,7 +806,7 @@ def main(args):
         rmsd_atoms=None,
         rmsd_include_het_atoms=True,
         jobstarter = small_cpu_jobstarter)
-    colabfold = protflow.tools.colabfold.Colabfold(jobstarter=gpu_jobstarter)
+    colabfold = protflow.tools.colabfold.Colabfold(jobstarter=real_gpu_jobstarter)
     if args.attnpacker_repack:
         attnpacker = protflow.tools.attnpacker.AttnPacker(jobstarter=gpu_jobstarter)
 
@@ -815,8 +815,8 @@ def main(args):
     ligandmpnn_options = f"--ligand_mpnn_use_side_chain_context 1 {args.ligandmpnn_options if args.ligandmpnn_options else ''}"
 
     # set up general rosetta options
-    bb_opt_options = f"-parser:protocol {os.path.abspath(os.path.join(args.riff_diff_dir, 'utils', 'fr_constrained.xml'))} -beta -ignore_zero_occupancy false -flip_HNQ true -use_input_sc true"
-    fr_options = f"-parser:protocol {os.path.abspath(os.path.join(protflow.config.AUXILIARY_RUNNER_SCRIPTS_DIR, 'fastrelax_sap.xml'))} -beta -ignore_zero_occupancy false -flip_HNQ true -use_input_sc true"
+    bb_opt_options = f"-parser:protocol {os.path.abspath(os.path.join(args.riff_diff_dir, 'utils', 'fr_constrained.xml'))} -beta -ignore_zero_occupancy false -flip_HNQ true -use_input_sc true -ignore_waters false"
+    fr_options = f"-parser:protocol {os.path.abspath(os.path.join(protflow.config.AUXILIARY_RUNNER_SCRIPTS_DIR, 'fastrelax_sap.xml'))} -beta -ignore_zero_occupancy false -flip_HNQ true -use_input_sc true -ignore_waters false"
 
     if params:
         fr_options = fr_options + f" -extra_res_fa {' '.join(params)}"
@@ -1675,7 +1675,7 @@ def main(args):
 
         if args.variants_run_cm:
             backbones.df["cm_resfile"] = backbones.df.apply(lambda row: create_mutation_resfiles(row['variants_omit_AAs'], row['variants_allow_AAs'], row['poses_description'], os.path.join(backbones.work_dir, "resfiles")), axis=1)
-            cm_options =  f"-parser:protocol {os.path.abspath(os.path.join(args.riff_diff_dir, 'utils', 'coupled_moves.xml'))} -coupled_moves:ligand_mode true -coupled_moves:ligand_weight 2 -beta -ignore_zero_occupancy false -flip_HNQ true"
+            cm_options =  f"-parser:protocol {os.path.abspath(os.path.join(args.riff_diff_dir, 'utils', 'coupled_moves.xml'))} -coupled_moves:ligand_mode true -coupled_moves:ligand_weight 2 -beta -ignore_zero_occupancy false -flip_HNQ true -ignore_waters false"
             if params:
                 cm_options = cm_options + f" -extra_res_fa {' '.join(params)}"
             backbones.df["cm_pose_opts"] = backbones.df.apply(lambda row: write_cm_opts(row["fixed_residues"], row["motif_residues"], row["updated_reference_frags_location"], args.variants_cm_design_shell, row['cm_resfile']), axis=1)
@@ -1935,7 +1935,7 @@ if __name__ == "__main__":
     # general optionals
     argparser.add_argument("--skip_refinement", action="store_true", help="Skip refinement and evaluation, only run screening.")
     argparser.add_argument("--skip_evaluation", action="store_true", help="Skip evaluation, only run screening and refinement.")
-    argparser.add_argument("--params_files", type=str, default=None, help="Path to alternative params file. Can also be multiple paths separated by ';'.")
+    argparser.add_argument("--params_files", type=str, default=None, help="Path to alternative params file. Can also be multiple paths separated by ','.")
     argparser.add_argument("--attnpacker_repack", action="store_true", help="Run attnpacker and af2 predictions")
     argparser.add_argument("--use_reduced_motif", action="store_true", help="Instead of using the full fragments during backbone optimization, just use residues directly adjacent to fixed_residues. Also affects motif_bb_rmsd etc.")
 
@@ -1945,7 +1945,7 @@ if __name__ == "__main__":
     argparser.add_argument("--max_cpus", type=int, default=1000, help="How many CPUs do you want to use at once?")
 
     # screening
-    argparser.add_argument("--screen_input_json", type=str, default=None, help="Read in a poses json file containing input poses for screening (e.g. the successful_input_motifs.json from a previous screening run).")
+    argparser.add_argument("--screen_input_json", type=str, default=None, help="Read in a poses json file containing input poses for screening (e.g. the selected_paths.json from motif generation or the successful_input_motifs.json from a previous screening run).")
     argparser.add_argument("--screen_decentralize_weights", type=str, nargs="+", default=[30], help="Decentralize weights that should be tested during screening.")
     argparser.add_argument("--screen_decentralize_distances", type=str, nargs="+", default=[2], help="Decentralize distances that should be tested during screening.")
     argparser.add_argument("--screen_input_poses", type=int, default=200, help="Number of input poses for screening. Poses will be selected according to <screen_input_selection>.")
@@ -1958,16 +1958,16 @@ if __name__ == "__main__":
     argparser.add_argument("--screen_esm_input_poses", type=int, default=5000, help="Maximum total number of poses that should be predicted with ESMFold.")
 
     # refinement optionals
-    argparser.add_argument("--ref_input_json", type=str, default=None, help="Read in a poses json file containing input poses for refinement. Screening will be skipped.")
+    argparser.add_argument("--ref_input_json", type=str, default=None, help="Read in a poses json file containing input poses for refinement (e.g. screening_results_all.json in the screening results directory). Screening will be skipped.")
     argparser.add_argument("--ref_prefix", type=str, default=None, help="Prefix for refinement runs for testing different settings.")
     argparser.add_argument("--ref_cycles", type=int, default=5, help="Number of Rosetta-MPNN-ESM refinement cycles.")
     argparser.add_argument("--ref_input_poses_per_bb", default=None, help="Filter the number of refinement input poses on an input-backbone level. This filter is applied before the ref_input_poses filter.")
     argparser.add_argument("--ref_input_poses", type=int, default=100, help="Maximum number of input poses for refinement cycles after initial RFDiffusion-MPNN-ESM-Rosetta run. Poses will be filtered by screen_composite_score.")
     argparser.add_argument("--ref_num_mpnn_seqs", type=int, default=25, help="Number of sequences that should be created per pose with LigandMPNN during refinement.")
-    argparser.add_argument("--ref_catres_bb_rmsd_cutoff_end", type=float, default=0.7, help="End value for catalytic residue backbone rmsd filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
     argparser.add_argument("--ref_catres_bb_rmsd_cutoff_start", type=float, default=1.2, help="Start value for catalytic residue backbone rmsd filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
-    argparser.add_argument("--ref_motif_rmsd_cutoff_end", type=float, default=1.0, help="End value for motif backbone rmsd filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
+    argparser.add_argument("--ref_catres_bb_rmsd_cutoff_end", type=float, default=0.7, help="End value for catalytic residue backbone rmsd filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
     argparser.add_argument("--ref_motif_rmsd_cutoff_start", type=float, default=1.5, help="Start value for motif backbone rmsd filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
+    argparser.add_argument("--ref_motif_rmsd_cutoff_end", type=float, default=1.0, help="End value for motif backbone rmsd filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
     argparser.add_argument("--ref_plddt_cutoff_end", type=float, default=85, help="End value for ESMFold plddt filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
     argparser.add_argument("--ref_plddt_cutoff_start", type=float, default=75, help="Start value for ESMFold plddt filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
     argparser.add_argument("--ref_num_cycle_poses", type=int, default=3, help="Number of poses per unique diffusion backbone that should be passed on to the next refinement cycle.")
