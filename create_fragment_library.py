@@ -1722,7 +1722,6 @@ def create_ligand_dict(ligand_ids, theozyme):
     lig_dict = {}
     if isinstance(ligand_ids, str):
         ligand_ids = [ligand_ids]
-
     for index, lig_id in enumerate(ligand_ids):
         resnum, chain = split_pdb_numbering(lig_id)
         if not chain in [chain.id for chain in theozyme.get_chains()] or not resnum in [res.id[1] for res in theozyme[0][chain].get_residues()]:
@@ -1740,7 +1739,8 @@ def create_ligand_dict(ligand_ids, theozyme):
                 atom.occupancy = 1
             lig.id = (lig.id[0], index+1, lig.id[2])
             ligand.add(lig)
-            lig_dict[chain] = {resnum: lig}
+            lig_dict.setdefault(chain, {})
+            lig_dict[chain].update({resnum: lig})
     return lig_dict, ligand
 
 def import_channel(path, chain, database):
@@ -1824,7 +1824,6 @@ def main(args):
 
     # import ligands
     lig_dict, ligand = create_ligand_dict(args.ligands, theozyme)
-
     # import channel
     channel = import_channel(args.custom_channel_path, args.channel_chain, database_dir)
     channel_size = len([res for res in channel.get_residues()])
