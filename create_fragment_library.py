@@ -1377,6 +1377,9 @@ def run_clash_detection(data, directory, bb_multiplier, sc_multiplier, script_pa
         backtrack([], 0)
         return valid_combos
 
+    def all_passing_clash_df(df1, df2):
+        return pd.DataFrame([{'pose1_index': i, 'pose2_index': j, 'pose1_path': row1['poses'], 'pose2_path': row2['poses'], 'model1': row1['model_num'], 'model2': row2['model_num'], 'clash': False, 'bb_bb_clash': 0, 'bb_sc_clash': 0, 'sc_sc_clash': 0} for (i, row1), (j, row2) in itertools.product(df1.iterrows(), df2.iterrows())])
+
     in_files = []
     in_dfs = []
     for pose, df in data.groupby('poses', sort=False):
@@ -1412,11 +1415,16 @@ def run_clash_detection(data, directory, bb_multiplier, sc_multiplier, script_pa
         i, j = prefix_map[prefix]
         filepath = os.path.join(directory, f"{prefix}.json")
         
-        # skip logs if no clash detection was run for a particular combination (this script doesn't produce outputs for glycine sidechain-backbone clash detection because glycines don't have sidechains.
+        # Glycine has no sidechain, so missing glycine sidechain clash outputs are all passing.
         if not os.path.isfile(filepath):
-            log_and_print(f"filepath does not exist. Skipping statistic collection for: {filepath}")
-            continue
-        clash_df = pd.read_json(filepath)
+            if not (in_dfs[i]['rotamer_id'].eq('GLY').all() or in_dfs[j]['rotamer_id'].eq('GLY').all()):
+                log_and_print(f"filepath does not exist. Skipping statistic collection for: {filepath}")
+                continue
+            log_and_print(f"filepath does not exist for glycine sidechain clash detection. Treating all pairs as passing: {filepath}")
+            clash_df = all_passing_clash_df(in_dfs[i], in_dfs[j])
+            clash_df.to_json(filepath, orient='records')
+        else:
+            clash_df = pd.read_json(filepath)
         clash_dfs.append(clash_df)
         filtered_df = clash_df[clash_df["clash"] == False]
 
