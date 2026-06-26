@@ -1683,6 +1683,34 @@ def build_frag_dict(rotlib, backbone_df):
     return frag_dict
 
 
+def build_frag_dict_from_current_rotamer(backbone_df, frag_pos_to_replace):
+    frag_dict = {}
+    for frag_num, pos in enumerate(frag_pos_to_replace):
+        df = pd.DataFrame(backbone_df.values, columns=backbone_df.columns)
+        df["frag_num"] = frag_num
+        df["rotamer_pos"] = pos
+        df["rotamer_score"] = 1
+        df["fragment_score"] = 1
+        df["backbone_score"] = 0
+        df["backbone_probability"] = 0
+        df["phi_psi_occurrence"] = None
+        df.loc[pos - 1, "probability"] = 1
+        df.loc[pos - 1, "phi_psi_occurrence"] = 1
+        frag_dict[pos] = df
+        log_and_print(f"Using current rotamer from input fragment for position {pos}.")
+    return frag_dict
+
+
+def remove_non_rotamer_sidechains(fragment, rotamer_position):
+    for residue in fragment:
+        if residue.id[1] == rotamer_position:
+            continue
+        for atom in list(residue):
+            if atom.id not in ["N", "CA", "C", "O"]:
+                residue.detach_child(atom.id)
+    return fragment
+
+
 def main(args):
 
 
@@ -1744,6 +1772,10 @@ def main(args):
         residue_identities = identify_residues_with_equivalent_func_groups(theozyme_residue, res_args.add_equivalent_func_groups)
         log_and_print(f"Looking for rotamers for these residues: {residue_identities}")
 
+        current_rotamer_backbone = None
+        if getattr(res_args, "keep_current_rotamer", False) and res_args.pick_frags_from_db:
+            raise KeyError("<keep_current_rotamer> can only be used with <fragment_pdb>, not <pick_frags_from_db>.")
+
                 
         if not res_args.pick_frags_from_db:
 
@@ -1757,42 +1789,51 @@ def main(args):
             if res_args.rotamer_positions == "auto":
                 frag_pos_to_replace = [i+1 for i, _ in enumerate(backbone.get_residues())][1:-1]
             elif isinstance(res_args.rotamer_positions, list):
-                frag_pos_to_replace = res_args.rotamer_positions
+                frag_pos_to_replace = [int(pos) for pos in res_args.rotamer_positions]
             elif isinstance(res_args.rotamer_positions, int):
                 frag_pos_to_replace = [res_args.rotamer_positions]
             else:
                 raise KeyError(f"<rotamer_position> for residue {resname} must be 'auto', a list of int, or a single int!")
 
+            if any(pos < 1 or pos > len(list(backbone.get_residues())) for pos in frag_pos_to_replace):
+                raise KeyError(f"<rotamer_position> for residue {resname} must be within the input fragment residue range!")
+
             # extract data from backbone
             backbone_df = create_df_from_fragment(backbone, os.path.basename(fragment_path))
 
-            # identify rotamers
-            rotlibs = []
-            log_and_print(f"Identifying rotamers...")
-            for pos in frag_pos_to_replace:
-                backbone_angles = extract_backbone_angles(backbone, pos)
-                log_and_print(f"Position {pos} phi/psi angles: {backbone_angles['phi']} / {backbone_angles['psi']}.")
-                rotlib = rotamers_for_backbone(residue_identities, rotlib_dir, backbone_angles["phi"], backbone_angles["psi"], res_args.prob_cutoff, res_args.rotamer_diff_to_best, 100, 2, 2)
-                rotlib["rotamer_position"] = pos
-                log_and_print(f"Found {len(rotlib.index)} rotamers for position {pos}.")
-                rotlibs.append(rotlib)
-            
-            # combine rotamer libraries for each position
-            rotlib = pd.concat(rotlibs).reset_index(drop=True)
+            if getattr(res_args, "keep_current_rotamer", False):
+                if not res_args.fragment_pdb:
+                    raise KeyError("<keep_current_rotamer> requires <fragment_pdb>.")
+                current_rotamer_backbone = backbone
+                frag_dict = build_frag_dict_from_current_rotamer(backbone_df, frag_pos_to_replace)
+            else:
+                # identify rotamers
+                rotlibs = []
+                log_and_print(f"Identifying rotamers...")
+                for pos in frag_pos_to_replace:
+                    backbone_angles = extract_backbone_angles(backbone, pos)
+                    log_and_print(f"Position {pos} phi/psi angles: {backbone_angles['phi']} / {backbone_angles['psi']}.")
+                    rotlib = rotamers_for_backbone(residue_identities, rotlib_dir, backbone_angles["phi"], backbone_angles["psi"], res_args.prob_cutoff, res_args.rotamer_diff_to_best, 100, 2, 2)
+                    rotlib["rotamer_position"] = pos
+                    log_and_print(f"Found {len(rotlib.index)} rotamers for position {pos}.")
+                    rotlibs.append(rotlib)
 
-            # rank rotamers
-            rotlib = normalize_col(rotlib, 'log_prob', scale=False)
-            rotlib = normalize_col(rotlib, 'log_occurrence', scale=False)
-            rotlib = combine_normalized_scores(rotlib, 'rotamer_score', ['log_prob_normalized', 'log_occurrence_normalized'], [res_args.prob_weight, res_args.occurrence_weight], False, True)
-            rotlib = rotlib.sort_values('rotamer_score', ascending=False).reset_index(drop=True)
+                # combine rotamer libraries for each position
+                rotlib = pd.concat(rotlibs).reset_index(drop=True)
 
-            log_and_print(f"Found {len(rotlib.index)} rotamers in total.")
-            rotlibcsv = os.path.join(rotinfo_dir, f'rotamers_{resname}_combined.csv')
-            log_and_print(f"Writing phi/psi combinations to {rotlibcsv}.")
-            rotlib.to_csv(rotlibcsv)
+                # rank rotamers
+                rotlib = normalize_col(rotlib, 'log_prob', scale=False)
+                rotlib = normalize_col(rotlib, 'log_occurrence', scale=False)
+                rotlib = combine_normalized_scores(rotlib, 'rotamer_score', ['log_prob_normalized', 'log_occurrence_normalized'], [res_args.prob_weight, res_args.occurrence_weight], False, True)
+                rotlib = rotlib.sort_values('rotamer_score', ascending=False).reset_index(drop=True)
 
-            # create dictionary containing dataframes for all fragments
-            frag_dict = build_frag_dict(rotlib, backbone_df)
+                log_and_print(f"Found {len(rotlib.index)} rotamers in total.")
+                rotlibcsv = os.path.join(rotinfo_dir, f'rotamers_{resname}_combined.csv')
+                log_and_print(f"Writing phi/psi combinations to {rotlibcsv}.")
+                rotlib.to_csv(rotlibcsv)
+
+                # create dictionary containing dataframes for all fragments
+                frag_dict = build_frag_dict(rotlib, backbone_df)
 
         else:
 
@@ -1899,7 +1940,11 @@ def main(args):
             frag_dict[pos]["flipped"] = False
             # check if residues should be flipped to increase number of fragments
             flip = False
-            if not res_args.not_flip_symmetric and any(x in tip_symmetric_residues() for x in residue_identities):
+            if (
+                not getattr(res_args, "keep_current_rotamer", False)
+                and not res_args.not_flip_symmetric
+                and any(x in tip_symmetric_residues() for x in residue_identities)
+            ):
                 flip = True
 
             check_dict = {"selected_frags": [], "selected_frag_dfs": [], "sc_clashes": [], "channel_clashes": 0, "bb_clashes": 0, "rmsd_fails": 0}
@@ -1907,7 +1952,10 @@ def main(args):
                 # check if maximum number of fragments has been reached
                 if len(check_dict["selected_frags"]) >= res_args.max_frags_per_residue / len(frag_dict):
                     break
-                frag = create_fragment_from_df(df, pos, AA_alphabet)
+                if getattr(res_args, "keep_current_rotamer", False):
+                    frag = remove_non_rotamer_sidechains(copy.deepcopy(current_rotamer_backbone), pos)
+                else:
+                    frag = create_fragment_from_df(df, pos, AA_alphabet)
                 frag = align_to_sidechain(frag, frag[pos], theozyme_residue, False)
                 check_dict = check_fragment(
                     frag=frag, 
@@ -2253,6 +2301,7 @@ if __name__ == "__main__":
     
     # important parameters
     argparser.add_argument("--fragment_pdb", type=str, default=None, help="Path to backbone fragment pdb. If not set, an idealized 7-residue helix fragment is used.")
+    argparser.add_argument("--keep_current_rotamer", action="store_true", help="Use the sidechain already present at rotamer_positions in fragment_pdb instead of sampling rotamers from the backbone-dependent rotamer library.")
     argparser.add_argument("--pick_frags_from_db", action="store_true", help="Select backbone fragments from database instead of providing a specific backbone manually. WARNING: This is much more time consuming!")
     argparser.add_argument("--custom_channel_path", type=str, default=None, help="Use a custom channel placeholder. Must be the path to a .pdb file.")
     argparser.add_argument("--channel_chain", type=str, default=None, help="Chain of the custom channel placeholder (if using a custom channel specified with <custom_channel_path>)")
