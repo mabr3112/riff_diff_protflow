@@ -12,8 +12,7 @@ import pandas as pd
 from Bio.PDB import Structure
 
 import protflow
-import protflow.config
-from protflow.jobstarters import SbatchArrayJobstarter
+from protflow.jobstarters import SbatchArrayJobstarter, LocalJobStarter
 import protflow.poses
 import protflow.residues
 import protflow.tools
@@ -31,6 +30,7 @@ from protflow.metrics.ligand import LigandClashes, LigandContacts
 from protflow.metrics.rmsd import BackboneRMSD, MotifRMSD, MotifSeparateSuperpositionRMSD
 import protflow.tools.rosetta
 from protflow.utils.biopython_tools import renumber_pdb_by_residue_mapping, load_structure_from_pdbfile, save_structure_to_pdbfile, get_sequence_from_pose
+from protflow.config import ROSETTA_BIN_PATH, AUXILIARY_RUNNER_SCRIPTS_DIR
 import protflow.utils.plotting as plots
 
 
@@ -84,8 +84,8 @@ def write_align_cmds(input_data: pd.Series, ref_motif_col: str = "template_motif
     # select fixed residues, show sticks and color
     cmds.append(f"select temp_cat_res, {write_pymol_motif_selection(input_data['poses_description'], input_data[target_catres_col])}")
     cmds.append(f"select temp_refcat_res, {write_pymol_motif_selection(ref_pose_name, input_data[ref_catres_col])}")
-    cmds.append(f"show sticks, temp_cat_res")
-    cmds.append(f"show sticks, temp_refcat_res")
+    cmds.append("show sticks, temp_cat_res")
+    cmds.append("show sticks, temp_refcat_res")
 
     if rlx_output:
         rlx = input_data["poses_description"] + "_rlx.pdb"
@@ -93,11 +93,11 @@ def write_align_cmds(input_data: pd.Series, ref_motif_col: str = "template_motif
         cmds.append(f"load {rlx}, {rlx_pose_name}")
         cmds.append(f"color deepsalmon, {rlx_pose_name}")
         cmds.append(f"select temp_rlxcat_res, {write_pymol_motif_selection(rlx_pose_name, input_data[target_catres_col])}")
-        cmds.append(f"show sticks, temp_rlxcat_res")
-        cmds.append(f"delete temp_rlxcat_res")
+        cmds.append("show sticks, temp_rlxcat_res")
+        cmds.append("delete temp_rlxcat_res")
 
-    cmds.append(f"hide sticks, hydrogens")
-    cmds.append(f"color atomic, (not elem C)")
+    cmds.append("hide sticks, hydrogens")
+    cmds.append("color atomic, (not elem C)")
 
     # store scene, delete selection and disable object:
     #cmds.append(f"center temp_motif_res")
@@ -106,10 +106,10 @@ def write_align_cmds(input_data: pd.Series, ref_motif_col: str = "template_motif
     cmds.append(f"disable {ref_pose_name}")
     if rlx_output:
         cmds.append(f"disable {rlx_pose_name}")
-    cmds.append(f"delete temp_cat_res")
-    cmds.append(f"delete temp_refcat_res")
-    cmds.append(f"delete temp_motif_res")
-    cmds.append(f"delete temp_ref_res")
+    cmds.append("delete temp_cat_res")
+    cmds.append("delete temp_refcat_res")
+    cmds.append("delete temp_motif_res")
+    cmds.append("delete temp_ref_res")
 
     return "\n".join(cmds)
 
@@ -150,12 +150,12 @@ def update_trajectory_plotting(trajectory_plots:dict, poses: Poses, prefix: str)
 def create_results_dir(poses: Poses, dir: str, score_col: str, plot_cols: list = None, rlx_path_col: str = None, create_mutations_csv: bool = False):
     os.makedirs(dir, exist_ok=True)
 
-    logging.info(f"Plotting final outputs.")
+    logging.info("Plotting final outputs.")
     plots.violinplot_multiple_cols(
         dataframe = poses.df,
         cols = plot_cols,
         y_labels = plot_cols,
-        out_path = os.path.join(dir, f"scores.png"),
+        out_path = os.path.join(dir, "scores.png"),
         show_fig = False
     )
 
@@ -265,10 +265,12 @@ def combine_screening_results(dir: str, prefixes: list, scoreterms: list, weight
     counts = poses.df["input_poses"].value_counts()
     poses.df["successful_screening_results"] = poses.df["input_poses"].map(counts)
     unique = poses.df.drop_duplicates(subset=["input_poses"], keep="first")
-    successfull_motifs = input_motifs.df.merge(unique[['input_poses', 'successful_screening_results']], on="input_poses")
-    successfull_motifs.sort_values("successful_screening_results", ascending=False, inplace=True)
-    successfull_motifs.reset_index(drop=True, inplace=True)
-    successfull_motifs.to_json(os.path.join(out_dir, "successful_input_motifs.json"))
+    if "successful_screening_results" in input_motifs.df.columns:
+        input_motifs.df.drop("successful_screening_results", inplace=True, axis=1)
+    successful_motifs = input_motifs.df.merge(unique[['input_poses', 'successful_screening_results']], on="input_poses")
+    successful_motifs.sort_values("successful_screening_results", ascending=False, inplace=True)
+    successful_motifs.reset_index(drop=True, inplace=True)
+    successful_motifs.to_json(os.path.join(out_dir, "successful_input_motifs.json"))
 
     return poses
 
@@ -372,7 +374,7 @@ def write_rfdiffusion_contig(frag_contigs:str, total_length:int, flanker_length:
         contig = f"{channel_contig}/0 {contig}"
     return f"'contigmap.contigs=[{contig}]' "
 
-def write_rfdiffusion_inpaint_seq(motif_residues:ResidueSelection, fixed_residues:ResidueSelection, sep=","):
+def write_rfdiffusion_inpaint_seq(motif_residues:ResidueSelection, fixed_residues:ResidueSelection):
     inpaint_seq = motif_residues - fixed_residues
     inpaint_seq = inpaint_seq.to_string(delim="/")
     return f"'contigmap.inpaint_seq=[{inpaint_seq}]'"
@@ -490,7 +492,7 @@ def create_mutation_resfiles(omitted_aas:str, allowed_aas:str, name:str, dir:str
     mutations = omitted + allowed
     mutations = sorted(mutations, key=lambda x: int(x.split()[0]))
     filename = os.path.join(dir, f"{name}.resfile")
-    resfile = "start\n" + "\n".join(mutations)
+    resfile = "AUTO\nstart\n" + "\n".join(mutations)
     with open(filename, "w") as out:
         out.write(resfile)
     return filename
@@ -752,7 +754,7 @@ def main(args):
 
     # check params files
     if args.params_files:
-        params = args.params.split(",")
+        params = args.params_files.split(",")
     elif "params_path" in backbones.df.columns:
         params = backbones.df["params_path"].unique()
         if len(params) > 1:
@@ -773,13 +775,22 @@ def main(args):
         ligand_paths = None
 
     # setup jobstarters
-    cpu_jobstarter = SbatchArrayJobstarter(max_cores=args.max_cpus, batch_cmds=args.max_cpus)
-    small_cpu_jobstarter = SbatchArrayJobstarter(max_cores=10, batch_cmds=10)
-    gpu_jobstarter = cpu_jobstarter if args.prefer_cpu else SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus)
-    real_gpu_jobstarter = SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus) # esmfold does not work on cpu
+    if args.jobstarter == "SbatchArray":
+        cpu_jobstarter = SbatchArrayJobstarter(max_cores=args.max_cpus, batch_cmds=args.max_cpus)
+        small_cpu_jobstarter = SbatchArrayJobstarter(max_cores=10, batch_cmds=10)
+        gpu_jobstarter = cpu_jobstarter if args.prefer_cpu else SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus)
+        real_gpu_jobstarter = SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus) # esmfold does not work on cpu
+    elif args.jobstarter == "Local":
+        jobstarter = LocalJobStarter(max_cores=args.max_cpus)
+        cpu_jobstarter = jobstarter
+        small_cpu_jobstarter = jobstarter
+        gpu_jobstarter = jobstarter
+        real_gpu_jobstarter = jobstarter
+    else:
+        raise KeyError("Jobstarter must be either 'SbatchArray' or 'Local'!")
 
     # set up runners
-    logging.info(f"Settung up runners.")
+    logging.info("Settung up runners.")
     rfdiffusion = protflow.tools.rfdiffusion.RFdiffusion(jobstarter = gpu_jobstarter)
     chain_adder = protflow.tools.protein_edits.ChainAdder(jobstarter = small_cpu_jobstarter)
     chain_remover = protflow.tools.protein_edits.ChainRemover(jobstarter = small_cpu_jobstarter)
@@ -792,8 +803,8 @@ def main(args):
     rog_calculator = GenericMetric(module="protflow.utils.metrics", function="calc_rog_of_pdb", jobstarter=small_cpu_jobstarter)
     tm_score_calculator = protflow.metrics.tmscore.TMalign(jobstarter = small_cpu_jobstarter)
     ligand_mpnn = protflow.tools.ligandmpnn.LigandMPNN(jobstarter = cpu_jobstarter)
-    rosetta = protflow.tools.rosetta.Rosetta(jobstarter = cpu_jobstarter, fail_on_missing_output_poses=True)
-    esmfold = protflow.tools.esmfold.ESMFold(jobstarter = real_gpu_jobstarter) # esmfold does not work on cpu
+    rosetta = protflow.tools.rosetta.Rosetta(jobstarter=cpu_jobstarter, fail_on_missing_output_poses=False)
+    esmfold = protflow.tools.esmfold.ESMFold(jobstarter=real_gpu_jobstarter) # esmfold does not work on cpu
     ligand_rmsd = MotifSeparateSuperpositionRMSD(
         ref_col="updated_reference_frags_location",
         super_target_motif="fixed_residues",
@@ -804,24 +815,25 @@ def main(args):
         rmsd_atoms=None,
         rmsd_include_het_atoms=True,
         jobstarter = small_cpu_jobstarter)
-    colabfold = protflow.tools.colabfold.Colabfold(jobstarter=gpu_jobstarter)
+    colabfold = protflow.tools.colabfold.Colabfold(jobstarter=real_gpu_jobstarter)
     if args.attnpacker_repack:
         attnpacker = protflow.tools.attnpacker.AttnPacker(jobstarter=gpu_jobstarter)
 
+    if not os.path.isfile(rosetta_scripts_path := os.path.join(ROSETTA_BIN_PATH, args.rosetta_scripts_application)):
+        raise KeyError(f"Could not find Rosetta scripts executable at {rosetta_scripts_path}! Make sure the right executable for <rosetta_scripts> was set (without path!) and <ROSETTA_BIN_PATH> is set in the ProtFlow config file!")
 
     # set up general ligandmpnn options
     ligandmpnn_options = f"--ligand_mpnn_use_side_chain_context 1 {args.ligandmpnn_options if args.ligandmpnn_options else ''}"
 
     # set up general rosetta options
-    bb_opt_options = f"-parser:protocol {os.path.abspath(os.path.join(args.riff_diff_dir, 'utils', 'fr_constrained.xml'))} -beta -ignore_zero_occupancy false -flip_HNQ true -use_input_sc true"
-    fr_options = f"-parser:protocol {os.path.abspath(os.path.join(protflow.config.AUXILIARY_RUNNER_SCRIPTS_DIR, 'fastrelax_sap.xml'))} -beta -ignore_zero_occupancy false -flip_HNQ true -use_input_sc true"
+    bb_opt_options = f"-parser:protocol {os.path.abspath(os.path.join(args.riff_diff_dir, 'utils', 'fr_constrained.xml'))} -beta -ignore_zero_occupancy false -flip_HNQ true -use_input_sc true -ignore_waters false"
+    fr_options = f"-parser:protocol {os.path.abspath(os.path.join(AUXILIARY_RUNNER_SCRIPTS_DIR, 'fastrelax_sap.xml'))} -beta -ignore_zero_occupancy false -flip_HNQ true -use_input_sc true -ignore_waters false"
 
     if params:
         fr_options = fr_options + f" -extra_res_fa {' '.join(params)}"
         bb_opt_options = bb_opt_options + f" -extra_res_fa {' '.join(params)}"
 
     trajectory_scoreterms = ["plddt", "catres_bb_rmsd", "catres_heavy_rmsd", "motif_rmsd", "contacts_score", "ligand_clashes", "tm_TM_score_ref"]
-
     ############################################## SCREENING ######################################################
 
 
@@ -854,6 +866,9 @@ def main(args):
             backbones.save_scores(input_poses_path)
 
         logging.info(f"Selected {len(backbones.df.index)} poses as input for screening.")
+        if backbones.df.empty:
+            logging.error(f"Input dataframe is empty. Are you sure you set up a correct working directory that does not contain input poses from previous runs at {input_poses_path}?")
+            raise RuntimeError(f"Input dataframe is empty. Are you sure you set up a correct working directory that does not contain input poses from previous runs at {input_poses_path}?")
 
         # save input backbones for later
         starting_motifs = copy.deepcopy(backbones)
@@ -863,13 +878,13 @@ def main(args):
 
         # setup rfdiffusion options:
         backbones.df["rfdiffusion_contigs"] = backbones.df.apply(lambda row: write_rfdiffusion_contig(row['motif_contigs'], args.total_length, args.flanker_length, row["frag_length"], args.flanking, row["channel_contig"] if "channel_contig" in backbones.df.columns else None, sep=","), axis=1)
-        backbones.df["rfdiffusion_inpaint_seq"] = backbones.df.apply(lambda row: write_rfdiffusion_inpaint_seq(row['motif_residues'], row['fixed_residues'], sep=","), axis=1)
+        backbones.df["rfdiffusion_inpaint_seq"] = backbones.df.apply(lambda row: write_rfdiffusion_inpaint_seq(row['motif_residues'], row['fixed_residues']), axis=1)
         backbones.df["rfdiffusion_pose_opts"] = backbones.df["rfdiffusion_contigs"] + backbones.df["rfdiffusion_inpaint_seq"]
 
         if args.recenter:
             logging.info(f"Parameter --recenter specified. Setting direction for custom recentering during diffusion towards {args.recenter}")
             if len(args.recenter.split(";")) != 3:
-                raise ValueError(f"--recenter needs to be semicolon separated coordinates. E.g. --recenter=31.123;-12.123;-0.342")
+                raise ValueError("--recenter needs to be semicolon separated coordinates. E.g. --recenter=31.123;-12.123;-0.342")
             recenter = f",recenter_xyz:{args.recenter}"
         else:
             recenter = ""
@@ -903,7 +918,7 @@ def main(args):
             )
 
             # remove channel chain (chain B)
-            logging.info(f"Diffusion completed, removing channel chain from diffusion outputs.")
+            logging.info("Diffusion completed, removing channel chain from diffusion outputs.")
             if "channel_contig" in backbones.df.columns:
                 chain_remover.run(
                     poses = backbones,
@@ -917,7 +932,7 @@ def main(args):
             if not os.path.isdir((updated_ref_frags_dir := os.path.join(backbones.work_dir, "updated_reference_frags"))):
                 os.makedirs(updated_ref_frags_dir)
 
-            logging.info(f"Channel chain removed, now renumbering reference fragments.")
+            logging.info("Channel chain removed, now renumbering reference fragments.")
             backbones.df["updated_reference_frags_location"] = update_and_copy_reference_frags(
                 input_df = backbones.df,
                 ref_col = "input_poses",
@@ -934,7 +949,7 @@ def main(args):
             backbones.df["covalent_bonds"] = backbones.df.apply(lambda row: update_covalent_bonds_info(row['covalent_bonds'], row["template_fixedres"], row["fixed_residues"]), axis=1)
 
             # calculate ROG after RFDiffusion, when channel chain is already removed:
-            logging.info(f"Calculating rfdiffusion_rog and rfdiffusion_catres_rmsd")
+            logging.info("Calculating rfdiffusion_rog and rfdiffusion_catres_rmsd")
             rog_calculator.run(poses=backbones, prefix="rfdiffusion_rog")
 
             # calculate rmsds
@@ -948,7 +963,7 @@ def main(args):
             )
 
             # add back the ligand:
-            logging.info(f"Metrics calculated, now adding Ligand chain back into backbones.")
+            logging.info("Metrics calculated, now adding Ligand chain back into backbones.")
             chain_adder.superimpose_add_chain(
                 poses = backbones,
                 prefix = "post_rfdiffusion_ligand",
@@ -958,7 +973,7 @@ def main(args):
             )
 
             # calculate ligand stats
-            logging.info(f"Calculating Ligand Statistics")
+            logging.info("Calculating Ligand Statistics")
             ligand_clash.run(poses=backbones, prefix="rfdiffusion_ligand")
             ligand_contacts.run(poses=backbones, prefix="rfdiffusion_lig")
             backbones.df = calculate_contact_score(df=backbones.df, contact_col="rfdiffusion_lig_contacts", score_col="rfdiffusion_contacts_score", target_value=args.contacts_target_value)
@@ -1032,18 +1047,18 @@ def main(args):
                 backbones = add_covalent_bonds_info(poses=backbones, prefix="bbopt_cov_info", covalent_bonds_col="covalent_bonds")
 
                 # optimize backbones
-                backbones.df[f'screen_bbopt_opts'] = [write_bbopt_opts(row=row, cycle=1, total_cycles=5, reference_location_col="updated_reference_frags_location", cat_res_col="fixed_residues", motif_res_col="motif_residues", ligand_chain="Z") for _, row in backbones.df.iterrows()]
+                backbones.df['screen_bbopt_opts'] = [write_bbopt_opts(row=row, cycle=1, total_cycles=5, reference_location_col="updated_reference_frags_location", cat_res_col="fixed_residues", motif_res_col="motif_residues", ligand_chain="Z") for _, row in backbones.df.iterrows()]
                 rosetta.run(
                     poses = backbones,
                     prefix = "bbopt",
-                    rosetta_application="rosetta_scripts.default.linuxgccrelease",
+                    rosetta_application=args.rosetta_scripts_application,
                     nstruct = 1,
                     options = bb_opt_options,
                     pose_options='screen_bbopt_opts'
                 )
 
                 # filter backbones down to starting backbones
-                backbones.filter_poses_by_rank(n=3, score_col=f"bbopt_total_score", remove_layers=2)
+                backbones.filter_poses_by_rank(n=3, score_col="bbopt_total_score", remove_layers=2)
 
                 # calculate ligand contacts and clashes again
                 ligand_clash.run(poses=backbones, prefix="bbopt_ligand")
@@ -1106,7 +1121,7 @@ def main(args):
             backbones.filter_poses_by_value(score_col="esm_rog_data", value=args.rfdiffusion_max_rog, operator="<=", prefix="esm_rog", plot=True)
 
             # add back ligand and determine pocket-ness!
-            logging.info(f"Adding Ligand back into the structure for ligand-based pocket prediction.")
+            logging.info("Adding Ligand back into the structure for ligand-based pocket prediction.")
             chain_adder.superimpose_add_chain(
                 poses = backbones,
                 prefix = "post_prediction_ligand",
@@ -1143,7 +1158,7 @@ def main(args):
             )
 
             # plot outputs
-            logging.info(f"Plotting outputs.")
+            logging.info("Plotting outputs.")
             cols = ["rfdiffusion_catres_rmsd", "esm_plddt", "esm_backbone_rmsd", "esm_catres_heavy_rmsd", "esm_motif_rmsd", "esm_tm_sc_tm", "esm_rog_data", "esm_lig_contacts", "esm_ligand_clashes"]
             titles = ["RFDiffusion Motif\nBackbone RMSD", "ESMFold pLDDT", "ESMFold BB-Ca RMSD", "ESMFold Sidechain\nRMSD", "ESMFold Motif RMSD", "SC-TM Score", "Radius of Gyration", "Ligand Contacts", "Ligand Clashes"]
             y_labels = ["Angstrom", "pLDDT", "Angstrom", "Angstrom", "Angstrom", "TM Score", "Angstrom", "#", "#"]
@@ -1202,8 +1217,10 @@ def main(args):
 
     ############################################# REFINEMENT ########################################################
     if args.ref_input_json:
-        if args.ref_prefix: ref_prefix = f"{args.ref_prefix}_"
-        elif args.screen_prefix: ref_prefix = f"{args.screen_prefix}_"
+        if args.ref_prefix:
+            ref_prefix = f"{args.ref_prefix}_"
+        elif args.screen_prefix:
+            ref_prefix = f"{args.screen_prefix}_"
         else: ref_prefix = ""
 
         refinement_dir = os.path.join(args.working_dir, f"{ref_prefix}refinement")
@@ -1212,11 +1229,11 @@ def main(args):
         backbones.set_work_dir(refinement_dir)
 
         if args.ref_input_poses_per_bb:
-            logging.info(f"Filtering refinement input poses on per backbone level according to screen_composite_score...")
-            backbones.filter_poses_by_rank(n=args.ref_input_poses_per_bb, score_col=f'screen_composite_score', remove_layers=1, prefix='refinement_input_bb', plot=True, plot_cols=["esm_plddt", "esm_tm_TM_score_ref", "esm_catres_bb_rmsd", "esm_catres_heavy_rmsd", "esm_lig_contacts", "esm_ligand_clashes", "esm_rog_data"])
+            logging.info("Filtering refinement input poses on per backbone level according to screen_composite_score...")
+            backbones.filter_poses_by_rank(n=args.ref_input_poses_per_bb, score_col='screen_composite_score', remove_layers=1, prefix='refinement_input_bb', plot=True, plot_cols=["esm_plddt", "esm_tm_TM_score_ref", "esm_catres_bb_rmsd", "esm_catres_heavy_rmsd", "esm_lig_contacts", "esm_ligand_clashes", "esm_rog_data"])
         if args.ref_input_poses:
-            logging.info(f"Filtering refinement input according to screen_composite_score...")
-            backbones.filter_poses_by_rank(n=args.ref_input_poses, score_col=f'screen_composite_score', prefix='refinement_input', plot=True, plot_cols=["esm_plddt", "esm_tm_TM_score_ref", "esm_catres_bb_rmsd", "esm_catres_heavy_rmsd", "esm_lig_contacts", "esm_ligand_clashes", "esm_rog_data"])
+            logging.info("Filtering refinement input according to screen_composite_score...")
+            backbones.filter_poses_by_rank(n=args.ref_input_poses, score_col='screen_composite_score', prefix='refinement_input', plot=True, plot_cols=["esm_plddt", "esm_tm_TM_score_ref", "esm_catres_bb_rmsd", "esm_catres_heavy_rmsd", "esm_lig_contacts", "esm_ligand_clashes", "esm_rog_data"])
 
         # use reduced motif if specified
         if args.use_reduced_motif:
@@ -1239,7 +1256,7 @@ def main(args):
             target_motif_col = "fixed_residues"
         )
 
-        logging.info(f"Plotting refinement input data.")
+        logging.info("Plotting refinement input data.")
         cols = ["esm_plddt", "esm_backbone_rmsd", "esm_catres_bb_rmsd", "esm_catres_heavy_rmsd", "esm_tm_sc_tm", "esm_rog_data", "esm_lig_contacts", "esm_ligand_clashes", "screen", "screen_decentralize_weight", "screen_decentralize_distance"]
         titles = ["ESMFold pLDDT", "ESMFold BB-Ca RMSD", "ESMFold fixed res\nBB-Ca RMSD", "ESMFold Sidechain\nRMSD", "SC-TM Score", "Radius of Gyration", "Ligand Contacts", "Ligand Clashes", "screen number", "decentralize weight", "decentralize distance"]
         y_labels = ["pLDDT", "Angstrom", "Angstrom", "Angstrom", "TM Score", "Angstrom", "#", "#", "#", "AU", "Angstrom"]
@@ -1287,7 +1304,7 @@ def main(args):
             rosetta.run(
                 poses = backbones,
                 prefix = f"cycle_{cycle}_bbopt",
-                rosetta_application="rosetta_scripts.default.linuxgccrelease",
+                rosetta_application=args.rosetta_scripts_application,
                 nstruct = 1,
                 options = bb_opt_options,
                 pose_options=f'cycle_{cycle}_bbopt_opts'
@@ -1316,7 +1333,7 @@ def main(args):
             )
 
             # calculate rmsds, TMscores and clashes
-            logging.info(f"Calculating post-ESMFold RMSDs...")
+            logging.info("Calculating post-ESMFold RMSDs...")
             catres_motif_heavy_rmsd.run(poses = backbones, prefix = f"cycle_{cycle}_esm_catres_heavy")
             catres_motif_bb_rmsd.run(poses = backbones, prefix = f"cycle_{cycle}_esm_catres_bb")
             fragment_motif_bb_rmsd.run(poses = backbones, prefix = f"cycle_{cycle}_esm_motif")
@@ -1324,7 +1341,7 @@ def main(args):
             tm_score_calculator.run(poses = backbones, prefix = f"cycle_{cycle}_esm_tm", ref_col = f"cycle_{cycle}_bbopt_location")
 
             # calculate cutoff & filter
-            logging.info(f"Applying post-ESMFold backbone filters...")
+            logging.info("Applying post-ESMFold backbone filters...")
             plddt_cutoff = ramp_cutoff(args.ref_plddt_cutoff_start, args.ref_plddt_cutoff_end, cycle, args.ref_cycles)
             catres_bb_rmsd_cutoff = ramp_cutoff(args.ref_catres_bb_rmsd_cutoff_start, args.ref_catres_bb_rmsd_cutoff_end, cycle, args.ref_cycles)
             motif_bb_rmsd_cutoff = ramp_cutoff(args.ref_motif_rmsd_cutoff_start, args.ref_motif_rmsd_cutoff_end, cycle, args.ref_cycles)
@@ -1379,7 +1396,8 @@ def main(args):
             backbones = add_covalent_bonds_info(poses=backbones, prefix=f"cycle_{cycle}_cov_info", covalent_bonds_col="covalent_bonds")
 
             # define number of index layers that were added during refinement cycle (higher in subsequent cycles because reindexing adds a layer)
-            if cycle > 1: layers += 1
+            if cycle > 1:
+                layers += 1
             else:
                 trajectory_plots = instantiate_trajectory_plotting(backbones.plots_dir, scores = trajectory_scoreterms)
 
@@ -1427,7 +1445,7 @@ def main(args):
 
         # create results directory
         refinement_results_dir = os.path.join(args.working_dir, f"{ref_prefix}refinement_results")
-        create_results_dir(poses=backbones, dir=refinement_results_dir, score_col=f"cycle_final_refinement_composite_score", plot_cols=ref_comp_scoreterms)
+        create_results_dir(poses=backbones, dir=refinement_results_dir, score_col="cycle_final_refinement_composite_score", plot_cols=ref_comp_scoreterms)
         for file in os.listdir(backbones.plots_dir):
             if file.startswith("trajectory") and file.endswith(".png"):
                 shutil.copy(os.path.join(backbones.plots_dir, file), refinement_results_dir)
@@ -1443,20 +1461,23 @@ def main(args):
 
     ########################### EVALUATION ###########################
     if args.eval_input_json:
-        if args.eval_prefix: eval_prefix = f"{args.eval_prefix}_"
-        elif args.ref_prefix: eval_prefix = f"{args.ref_prefix}_"
-        elif args.screen_prefix: eval_prefix = f"{args.screen_prefix}_"
+        if args.eval_prefix:
+            eval_prefix = f"{args.eval_prefix}_"
+        elif args.ref_prefix:
+            eval_prefix = f"{args.ref_prefix}_"
+        elif args.screen_prefix:
+            eval_prefix = f"{args.screen_prefix}_"
         else: eval_prefix = ""
 
         backbones.set_work_dir(os.path.join(args.working_dir, f"{eval_prefix}evaluation"))
 
-        score_cols = [f"cycle_final_esm_plddt", f"cycle_final_esm_catres_bb_rmsd", f"cycle_final_esm_catres_heavy_rmsd", f"cycle_final_esm_motif_rmsd", f"cycle_final_esm_contacts_score", f"cycle_final_esm_ligand_clashes"]
+        score_cols = ["cycle_final_esm_plddt", "cycle_final_esm_catres_bb_rmsd", "cycle_final_esm_catres_heavy_rmsd", "cycle_final_esm_motif_rmsd", "cycle_final_esm_contacts_score", "cycle_final_esm_ligand_clashes"]
         if args.eval_input_poses_per_bb:
-            logging.info(f"Filtering evaluation input poses on per backbone level according to cycle_final_refinement_composite_score...")
-            backbones.filter_poses_by_rank(n=args.eval_input_poses_per_bb, score_col=f"cycle_final_refinement_composite_score", remove_layers=1, prefix="evaluation_input_per_bb", plot=True, plot_cols=score_cols)
+            logging.info("Filtering evaluation input poses on per backbone level according to cycle_final_refinement_composite_score...")
+            backbones.filter_poses_by_rank(n=args.eval_input_poses_per_bb, score_col="cycle_final_refinement_composite_score", remove_layers=1, prefix="evaluation_input_per_bb", plot=True, plot_cols=score_cols)
         if args.eval_input_poses:
-            logging.info(f"Filtering evaluation input poses according to cycle_final_refinement_composite_score...")
-            backbones.filter_poses_by_rank(n=args.eval_input_poses, score_col=f"cycle_final_refinement_composite_score", prefix="evaluation_input", plot=True, plot_cols=score_cols)
+            logging.info("Filtering evaluation input poses according to cycle_final_refinement_composite_score...")
+            backbones.filter_poses_by_rank(n=args.eval_input_poses, score_col="cycle_final_refinement_composite_score", prefix="evaluation_input", plot=True, plot_cols=score_cols)
 
         evaluation_input_poses_dir = os.path.join(backbones.work_dir, "evaluation_input_poses")
         os.makedirs(evaluation_input_poses_dir, exist_ok=True)
@@ -1468,7 +1489,7 @@ def main(args):
         logging.info(f"Writing pymol alignment script for evaluation input poses at {evaluation_input_poses_dir}.")
         write_pymol_alignment_script(
             df = backbones.df,
-            scoreterm = f"cycle_final_refinement_composite_score",
+            scoreterm = "cycle_final_refinement_composite_score",
             top_n = np.min([len(backbones.df.index), 25]),
             path_to_script = os.path.join(evaluation_input_poses_dir, "align_input_poses.pml"),
             ref_motif_col = "template_fixedres",
@@ -1500,11 +1521,11 @@ def main(args):
         )
 
         # calculate backbone rmsds
-        catres_motif_bb_rmsd.run(poses=backbones, prefix=f"eval_af2_catres_bb")
-        bb_rmsd.run(poses=backbones, prefix="eval_af2_backbone", ref_col=f"cycle_final_bbopt_location")
-        bb_rmsd.run(poses=backbones, prefix="eval_af2_ESM_bb", ref_col=f"cycle_final_esm_location")
-        tm_score_calculator.run(poses=backbones, prefix="eval_af2_tm", ref_col=f"cycle_final_bbopt_location")
-        tm_score_calculator.run(poses=backbones, prefix="eval_af2_ESM_tm", ref_col=f"cycle_final_esm_location")
+        catres_motif_bb_rmsd.run(poses=backbones, prefix="eval_af2_catres_bb")
+        bb_rmsd.run(poses=backbones, prefix="eval_af2_backbone", ref_col="cycle_final_bbopt_location")
+        bb_rmsd.run(poses=backbones, prefix="eval_af2_ESM_bb", ref_col="cycle_final_esm_location")
+        tm_score_calculator.run(poses=backbones, prefix="eval_af2_tm", ref_col="cycle_final_bbopt_location")
+        tm_score_calculator.run(poses=backbones, prefix="eval_af2_ESM_tm", ref_col="cycle_final_esm_location")
         fragment_motif_bb_rmsd.run(poses = backbones, prefix = "eval_af2_motif")
 
         # calculate average plddt
@@ -1515,23 +1536,23 @@ def main(args):
 
         # apply rest of the filters
         backbones.filter_poses_by_value(score_col="eval_af2_plddt", value=args.eval_plddt_cutoff, operator=">=", prefix="eval_af2_plddt", plot=True)
-        backbones.filter_poses_by_value(score_col="eval_af2_tm_TM_score_ref", value=0.9, operator=">=", prefix=f"eval_af2_TM_score", plot=True)
-        backbones.filter_poses_by_value(score_col="eval_af2_catres_bb_rmsd", value=args.eval_catres_bb_rmsd_cutoff, operator="<=", prefix=f"eval_af2_catres_bb_rmsd", plot=True)
+        backbones.filter_poses_by_value(score_col="eval_af2_tm_TM_score_ref", value=0.9, operator=">=", prefix="eval_af2_TM_score", plot=True)
+        backbones.filter_poses_by_value(score_col="eval_af2_catres_bb_rmsd", value=args.eval_catres_bb_rmsd_cutoff, operator="<=", prefix="eval_af2_catres_bb_rmsd", plot=True)
 
         # repack with attnpacker
         if args.attnpacker_repack:
             attnpacker.run(
                 poses=backbones,
-                prefix=f"eval_packing"
+                prefix="eval_packing"
             )
 
         # calculate sc rmsd
-        catres_motif_heavy_rmsd.run(poses=backbones, prefix=f"eval_af2_catres_heavy")
+        catres_motif_heavy_rmsd.run(poses=backbones, prefix="eval_af2_catres_heavy")
 
         # add ligand chain
         chain_adder.superimpose_add_chain(
             poses = backbones,
-            prefix = f"eval_ligand",
+            prefix = "eval_ligand",
             ref_col = "updated_reference_frags_location",
             target_motif = "fixed_residues",
             copy_chain = "Z"
@@ -1556,7 +1577,7 @@ def main(args):
         rosetta.run(
             poses = rlx_poses,
             prefix = "eval_af2_fastrelax",
-            rosetta_application="rosetta_scripts.default.linuxgccrelease",
+            rosetta_application=args.rosetta_scripts_application,
             nstruct = 15,
             options = fr_options
         )
@@ -1590,7 +1611,7 @@ def main(args):
         )
 
         # update trajectory plots
-        trajectory_plots = update_trajectory_plotting(trajectory_plots=trajectory_plots, poses=backbones, prefix=f"eval_af2")
+        trajectory_plots = update_trajectory_plotting(trajectory_plots=trajectory_plots, poses=backbones, prefix="eval_af2")
 
         backbones.reindex_poses(prefix="eval_reindex", remove_layers=1 if not args.attnpacker_repack else 2, force_reindex=True)
 
@@ -1605,10 +1626,11 @@ def main(args):
 
     if args.variants_input_json:
 
-        if args.variants_prefix: variants_prefix = f"{args.variants_prefix}_"
+        if args.variants_prefix:
+            variants_prefix = f"{args.variants_prefix}_"
         else: variants_prefix = ""
 
-        backbones.set_work_dir(variants_work_dir := os.path.join(args.working_dir, f"{variants_prefix}variants"))
+        backbones.set_work_dir(os.path.join(args.working_dir, f"{variants_prefix}variants"))
 
         eval_trajectory_plots = instantiate_trajectory_plotting(backbones.plots_dir, scores = ["postrelax_catres_heavy_rmsd_mean", "postrelax_ligand_rmsd_mean", "fastrelax_sap_score_mean"])
         eval_trajectory_plots = update_trajectory_plotting(trajectory_plots=eval_trajectory_plots, poses=backbones, prefix="eval_af2")
@@ -1650,13 +1672,13 @@ def main(args):
         backbones = add_covalent_bonds_info(poses=backbones, prefix="variants_bbopt_cov_info", covalent_bonds_col="covalent_bonds")
 
         # create pose-specific options
-        backbones.df[f'variants_bbopt_opts'] = [write_bbopt_opts(row=row, cycle=1, total_cycles=1, reference_location_col="updated_reference_frags_location", cat_res_col="fixed_residues", motif_res_col="motif_residues", ligand_chain="Z") for _, row in backbones.df.iterrows()]
+        backbones.df['variants_bbopt_opts'] = [write_bbopt_opts(row=row, cycle=1, total_cycles=1, reference_location_col="updated_reference_frags_location", cat_res_col="fixed_residues", motif_res_col="motif_residues", ligand_chain="Z") for _, row in backbones.df.iterrows()]
 
         # optimize backbones (constrained)
         rosetta.run(
             poses = backbones,
-            prefix = f"variants_bbopt",
-            rosetta_application="rosetta_scripts.default.linuxgccrelease",
+            prefix = "variants_bbopt",
+            rosetta_application=args.rosetta_scripts_application,
             nstruct = 1,
             options = bb_opt_options,
             pose_options='variants_bbopt_opts'
@@ -1664,7 +1686,7 @@ def main(args):
 
         if args.variants_run_cm:
             backbones.df["cm_resfile"] = backbones.df.apply(lambda row: create_mutation_resfiles(row['variants_omit_AAs'], row['variants_allow_AAs'], row['poses_description'], os.path.join(backbones.work_dir, "resfiles")), axis=1)
-            cm_options =  f"-parser:protocol {os.path.abspath(os.path.join(args.riff_diff_dir, 'utils', 'coupled_moves.xml'))} -coupled_moves:ligand_mode true -coupled_moves:ligand_weight 2 -beta -ignore_zero_occupancy false -flip_HNQ true"
+            cm_options =  f"-parser:protocol {os.path.abspath(os.path.join(args.riff_diff_dir, 'utils', 'coupled_moves.xml'))} -coupled_moves:ligand_mode true -coupled_moves:ligand_weight 2 -beta -ignore_zero_occupancy false -flip_HNQ true -ignore_waters false"
             if params:
                 cm_options = cm_options + f" -extra_res_fa {' '.join(params)}"
             backbones.df["cm_pose_opts"] = backbones.df.apply(lambda row: write_cm_opts(row["fixed_residues"], row["motif_residues"], row["updated_reference_frags_location"], args.variants_cm_design_shell, row['cm_resfile']), axis=1)
@@ -1675,11 +1697,11 @@ def main(args):
             os.chdir(cm_dir)
             pre_cm_poses = copy.deepcopy(backbones)
 
-            if not os.path.isfile(cm_results_file := os.path.abspath(os.path.join(cm_dir, "coupled_moves_rosetta_scores.json"))):
+            if not os.path.isfile(os.path.abspath(os.path.join(cm_dir, "coupled_moves_rosetta_scores.json"))):
                 rosetta.run(
                     poses=backbones,
                     prefix="coupled_moves",
-                    rosetta_application="rosetta_scripts.default.linuxgccrelease",
+                    rosetta_application=args.rosetta_scripts_application,
                     nstruct=50,
                     options=cm_options,
                     pose_options="cm_pose_opts")
@@ -1708,7 +1730,7 @@ def main(args):
             # optimize sequences
             ligand_mpnn.run(
                 poses = backbones,
-                prefix = f"variants_mpnn",
+                prefix = "variants_mpnn",
                 nseq = args.variants_mpnn_sequences,
                 model_type = "ligand_mpnn",
                 options = ligandmpnn_options,
@@ -1719,7 +1741,7 @@ def main(args):
         # predict structures using ESMFold
         esmfold.run(
             poses = backbones,
-            prefix = f"variants_esm",
+            prefix = "variants_esm",
         )
 
         # TODO: no idea why, but residue columns seem to be lost when repeating run. hope this fixes it.
@@ -1730,20 +1752,20 @@ def main(args):
                 backbones.df[res_col] = [ResidueSelection(motif, from_scorefile=True) for motif in backbones.df[res_col].to_list()]
 
         # calculate rmsds, TMscores and clashes
-        catres_motif_heavy_rmsd.run(poses = backbones, prefix = f"variants_esm_catres_heavy")
-        catres_motif_bb_rmsd.run(poses = backbones, prefix = f"variants_esm_catres_bb")
-        bb_rmsd.run(poses = backbones, ref_col=f"variants_bbopt_location", prefix = f"variants_esm_backbone")
+        catres_motif_heavy_rmsd.run(poses = backbones, prefix = "variants_esm_catres_heavy")
+        catres_motif_bb_rmsd.run(poses = backbones, prefix = "variants_esm_catres_bb")
+        bb_rmsd.run(poses = backbones, ref_col="variants_bbopt_location", prefix = "variants_esm_backbone")
         fragment_motif_bb_rmsd.run(poses = backbones, prefix = "variants_esm_motif")
-        tm_score_calculator.run(poses = backbones, prefix = f"variants_esm_tm", ref_col = f"variants_bbopt_location")
+        tm_score_calculator.run(poses = backbones, prefix = "variants_esm_tm", ref_col = "variants_bbopt_location")
 
-        backbones.filter_poses_by_value(score_col=f"variants_esm_plddt", value=args.ref_plddt_cutoff_end, operator=">=", prefix=f"variants_esm_plddt", plot=True)
-        backbones.filter_poses_by_value(score_col=f"variants_esm_tm_TM_score_ref", value=0.9, operator=">=", prefix=f"variants_esm_TM_score", plot=True)
-        backbones.filter_poses_by_value(score_col=f"variants_esm_catres_bb_rmsd", value=args.ref_catres_bb_rmsd_cutoff_end, operator="<=", prefix=f"variants_esm_catres_bb", plot=True)
+        backbones.filter_poses_by_value(score_col="variants_esm_plddt", value=args.ref_plddt_cutoff_end, operator=">=", prefix="variants_esm_plddt", plot=True)
+        backbones.filter_poses_by_value(score_col="variants_esm_tm_TM_score_ref", value=0.9, operator=">=", prefix="variants_esm_TM_score", plot=True)
+        backbones.filter_poses_by_value(score_col="variants_esm_catres_bb_rmsd", value=args.ref_catres_bb_rmsd_cutoff_end, operator="<=", prefix="variants_esm_catres_bb", plot=True)
 
         # add ligand to poses
         chain_adder.superimpose_add_chain(
             poses = backbones,
-            prefix = f"variants_esm_ligand",
+            prefix = "variants_esm_ligand",
             ref_col = "updated_reference_frags_location",
             target_motif = "fixed_residues",
             copy_chain = "Z"
@@ -1757,7 +1779,7 @@ def main(args):
         backbones.filter_poses_by_value(score_col="variants_esm_lig_contacts", value=args.min_contacts, operator=">=", prefix="variants_esm_lig_contacts", plot=True)
 
         # copy description column for merging with data later
-        backbones.df[f'variants_post_esm_description'] = backbones.df['poses_description']
+        backbones.df['variants_post_esm_description'] = backbones.df['poses_description']
 
         # calculate multi-scoreterm score:
         logging.info("Calculating composite score for post-esm evaluation...")
@@ -1777,7 +1799,7 @@ def main(args):
         layers = 2
 
         # manage screen output
-        backbones.reindex_poses(prefix=f"variants_esm_reindex", remove_layers=layers, force_reindex=True)
+        backbones.reindex_poses(prefix="variants_esm_reindex", remove_layers=layers, force_reindex=True)
 
         # filter down to rfdiffusion backbones
         backbones.filter_poses_by_rank(
@@ -1810,7 +1832,7 @@ def main(args):
         )
 
         # calculate backbone rmsds
-        catres_motif_bb_rmsd.run(poses=backbones, prefix=f"variants_af2_catres_bb")
+        catres_motif_bb_rmsd.run(poses=backbones, prefix="variants_af2_catres_bb")
         bb_rmsd.run(poses=backbones, prefix="variants_af2_backbone", ref_col="variants_bbopt_location")
         bb_rmsd.run(poses=backbones, prefix="variants_af2_ESM_bb", ref_col="variants_esm_location")
         tm_score_calculator.run(poses=backbones, prefix="variants_af2_tm", ref_col="variants_bbopt_location")
@@ -1832,7 +1854,7 @@ def main(args):
         if args.attnpacker_repack:
             attnpacker.run(
                 poses=backbones,
-                prefix=f"eval_af2_packing"
+                prefix=f"variants_af2_packing"
             )
 
         # calculate sc rmsd
@@ -1866,7 +1888,7 @@ def main(args):
         rosetta.run(
             poses = rlx_poses,
             prefix = "variants_af2_fastrelax",
-            rosetta_application="rosetta_scripts.default.linuxgccrelease",
+            rosetta_application=args.rosetta_scripts_application,
             nstruct = 15,
             options = fr_options
         )
@@ -1906,7 +1928,7 @@ def main(args):
         backbones.reindex_poses(prefix="variants_af2_reindex", remove_layers=2 if not args.attnpacker_repack else 3, force_reindex=True)
 
         # filter for unique diffusion backbones
-        backbones.filter_poses_by_rank(n=5, score_col="variants_af2_composite_score", remove_layers=3, plot=True)
+        #backbones.filter_poses_by_rank(n=5, score_col="variants_af2_composite_score", group_col="eval_af2_location", prefix="filter_af2_composite_score_post_reindex", plot=True)
 
         # create output directory
         create_results_dir(poses=backbones, dir=os.path.join(args.working_dir, f"{variants_prefix}variants_results"), score_col="variants_af2_composite_score", plot_cols=variants_af2_scoreterms, rlx_path_col="variants_relaxed_combined_path", create_mutations_csv=True)
@@ -1922,19 +1944,21 @@ if __name__ == "__main__":
     argparser.add_argument("--working_dir", type=str, required=True, help="output directory.")
 
     # general optionals
+    argparser.add_argument("--rosetta_scripts_application", type=str, default="rosetta_scripts.cxx11threadserialization.linuxclangrelease", help="Name of the Rosetta scripts applications (not the full path!)")
     argparser.add_argument("--skip_refinement", action="store_true", help="Skip refinement and evaluation, only run screening.")
     argparser.add_argument("--skip_evaluation", action="store_true", help="Skip evaluation, only run screening and refinement.")
-    argparser.add_argument("--params_files", type=str, default=None, help="Path to alternative params file. Can also be multiple paths separated by ';'.")
+    argparser.add_argument("--params_files", type=str, default=None, help="Path to alternative params file. Can also be multiple paths separated by ','.")
     argparser.add_argument("--attnpacker_repack", action="store_true", help="Run attnpacker and af2 predictions")
     argparser.add_argument("--use_reduced_motif", action="store_true", help="Instead of using the full fragments during backbone optimization, just use residues directly adjacent to fixed_residues. Also affects motif_bb_rmsd etc.")
 
     # jobstarter
+    argparser.add_argument("--jobstarter", type=str, default="SbatchArray", help="Defines if jobs run locally or distributed on a cluster using a protflow jobstarter. Must be one of ['SbatchArray', 'Local'].")
     argparser.add_argument("--prefer_cpu", action="store_true", help="Use CPUs instead of GPUs, where possible (ESMFold will only work with GPU).")
     argparser.add_argument("--max_gpus", type=int, default=10, help="How many GPUs do you want to use at once?")
     argparser.add_argument("--max_cpus", type=int, default=1000, help="How many CPUs do you want to use at once?")
 
     # screening
-    argparser.add_argument("--screen_input_json", type=str, default=None, help="Read in a poses json file containing input poses for screening (e.g. the successful_input_motifs.json from a previous screening run).")
+    argparser.add_argument("--screen_input_json", type=str, default=None, help="Read in a poses json file containing input poses for screening (e.g. the selected_paths.json from motif generation or the successful_input_motifs.json from a previous screening run).")
     argparser.add_argument("--screen_decentralize_weights", type=str, nargs="+", default=[30], help="Decentralize weights that should be tested during screening.")
     argparser.add_argument("--screen_decentralize_distances", type=str, nargs="+", default=[2], help="Decentralize distances that should be tested during screening.")
     argparser.add_argument("--screen_input_poses", type=int, default=200, help="Number of input poses for screening. Poses will be selected according to <screen_input_selection>.")
@@ -1947,16 +1971,16 @@ if __name__ == "__main__":
     argparser.add_argument("--screen_esm_input_poses", type=int, default=5000, help="Maximum total number of poses that should be predicted with ESMFold.")
 
     # refinement optionals
-    argparser.add_argument("--ref_input_json", type=str, default=None, help="Read in a poses json file containing input poses for refinement. Screening will be skipped.")
+    argparser.add_argument("--ref_input_json", type=str, default=None, help="Read in a poses json file containing input poses for refinement (e.g. screening_results_all.json in the screening results directory). Screening will be skipped.")
     argparser.add_argument("--ref_prefix", type=str, default=None, help="Prefix for refinement runs for testing different settings.")
     argparser.add_argument("--ref_cycles", type=int, default=5, help="Number of Rosetta-MPNN-ESM refinement cycles.")
     argparser.add_argument("--ref_input_poses_per_bb", default=None, help="Filter the number of refinement input poses on an input-backbone level. This filter is applied before the ref_input_poses filter.")
     argparser.add_argument("--ref_input_poses", type=int, default=100, help="Maximum number of input poses for refinement cycles after initial RFDiffusion-MPNN-ESM-Rosetta run. Poses will be filtered by screen_composite_score.")
     argparser.add_argument("--ref_num_mpnn_seqs", type=int, default=25, help="Number of sequences that should be created per pose with LigandMPNN during refinement.")
-    argparser.add_argument("--ref_catres_bb_rmsd_cutoff_end", type=float, default=0.7, help="End value for catalytic residue backbone rmsd filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
     argparser.add_argument("--ref_catres_bb_rmsd_cutoff_start", type=float, default=1.2, help="Start value for catalytic residue backbone rmsd filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
-    argparser.add_argument("--ref_motif_rmsd_cutoff_end", type=float, default=1.0, help="End value for motif backbone rmsd filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
+    argparser.add_argument("--ref_catres_bb_rmsd_cutoff_end", type=float, default=0.7, help="End value for catalytic residue backbone rmsd filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
     argparser.add_argument("--ref_motif_rmsd_cutoff_start", type=float, default=1.5, help="Start value for motif backbone rmsd filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
+    argparser.add_argument("--ref_motif_rmsd_cutoff_end", type=float, default=1.0, help="End value for motif backbone rmsd filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
     argparser.add_argument("--ref_plddt_cutoff_end", type=float, default=85, help="End value for ESMFold plddt filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
     argparser.add_argument("--ref_plddt_cutoff_start", type=float, default=75, help="Start value for ESMFold plddt filter after each refinement cycle. Filter will be ramped from start to end during refinement.")
     argparser.add_argument("--ref_num_cycle_poses", type=int, default=3, help="Number of poses per unique diffusion backbone that should be passed on to the next refinement cycle.")
