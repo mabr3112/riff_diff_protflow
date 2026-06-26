@@ -398,6 +398,10 @@ def clash_detection(entity1, entity2, vdw_multiplier):
     clash_detection_vdw_multiplier: multiply Van der Waals radii with this value to set clash detection limits higher/lower
     database: path to database directory
     '''
+    entity1 = list(entity1)
+    entity2 = list(entity2)
+    if not entity1 or not entity2:
+        return None
 
     entity1_coords = np.array([atom.get_coord() for atom in entity1])
     entity2_coords = np.array([atom.get_coord() for atom in entity2])
