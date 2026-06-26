@@ -12,7 +12,7 @@ import pandas as pd
 from Bio.PDB import Structure
 
 import protflow
-from protflow.jobstarters import SbatchArrayJobstarter
+from protflow.jobstarters import SbatchArrayJobstarter, LocalJobStarter
 import protflow.poses
 import protflow.residues
 import protflow.tools
@@ -775,10 +775,19 @@ def main(args):
         ligand_paths = None
 
     # setup jobstarters
-    cpu_jobstarter = SbatchArrayJobstarter(max_cores=args.max_cpus, batch_cmds=args.max_cpus)
-    small_cpu_jobstarter = SbatchArrayJobstarter(max_cores=10, batch_cmds=10)
-    gpu_jobstarter = cpu_jobstarter if args.prefer_cpu else SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus)
-    real_gpu_jobstarter = SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus) # esmfold does not work on cpu
+    if args.jobstarter == "SbatchArray":
+        cpu_jobstarter = SbatchArrayJobstarter(max_cores=args.max_cpus, batch_cmds=args.max_cpus)
+        small_cpu_jobstarter = SbatchArrayJobstarter(max_cores=10, batch_cmds=10)
+        gpu_jobstarter = cpu_jobstarter if args.prefer_cpu else SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus)
+        real_gpu_jobstarter = SbatchArrayJobstarter(max_cores=args.max_gpus, gpus=1, batch_cmds=args.max_gpus) # esmfold does not work on cpu
+    elif args.jobstarter == "Local":
+        jobstarter = LocalJobStarter(max_cores=args.max_cpus)
+        cpu_jobstarter = jobstarter
+        small_cpu_jobstarter = jobstarter
+        gpu_jobstarter = jobstarter
+        real_gpu_jobstarter = jobstarter
+    else:
+        raise KeyError("Jobstarter must be either 'SbatchArray' or 'Local'!")
 
     # set up runners
     logging.info("Settung up runners.")
@@ -1943,6 +1952,7 @@ if __name__ == "__main__":
     argparser.add_argument("--use_reduced_motif", action="store_true", help="Instead of using the full fragments during backbone optimization, just use residues directly adjacent to fixed_residues. Also affects motif_bb_rmsd etc.")
 
     # jobstarter
+    argparser.add_argument("--jobstarter", type=str, default="SbatchArray", help="Defines if jobs run locally or distributed on a cluster using a protflow jobstarter. Must be one of ['SbatchArray', 'Local'].")
     argparser.add_argument("--prefer_cpu", action="store_true", help="Use CPUs instead of GPUs, where possible (ESMFold will only work with GPU).")
     argparser.add_argument("--max_gpus", type=int, default=10, help="How many GPUs do you want to use at once?")
     argparser.add_argument("--max_cpus", type=int, default=1000, help="How many CPUs do you want to use at once?")
