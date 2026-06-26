@@ -1411,6 +1411,11 @@ def run_clash_detection(data, directory, bb_multiplier, sc_multiplier, script_pa
     for prefix in prefixes:
         i, j = prefix_map[prefix]
         filepath = os.path.join(directory, f"{prefix}.json")
+        
+        # skip logs if no clash detection was run for a particular combination (this script doesn't produce outputs for glycine sidechain-backbone clash detection because glycines don't have sidechains.
+        if not os.path.isfile(filepath):
+            log_and_print(f"filepath does not exist. Skipping statistic collection for: {filepath}")
+            continue
         clash_df = pd.read_json(filepath)
         clash_dfs.append(clash_df)
         filtered_df = clash_df[clash_df["clash"] == False]
